@@ -1,17 +1,14 @@
 import random
 
-import pygame
-
 # Constants
 WIDTH, HEIGHT = 800, 600
 EDGE_MARGIN = 100
 NUM_BOIDS = 50
 MAX_SPEED = 4
-MAX_FORCE = 0.1
-PERCEPTION_RADIUS = 80
-SEPARATION_RADIUS = 30
+PERCEPTION_RADIUS = 120
+SEPARATION_RADIUS = 50
 ALIGNMENT_WEIGHT = 0.09
-COHESION_WEIGHT = 0.005
+COHESION_WEIGHT = 0.003
 SEPARATION_WEIGHT = 0.08
 TURN = 1
 enlightenment_chance = 5000
@@ -42,20 +39,15 @@ class Boid:
                 self.vy += i.vy * ALIGNMENT_WEIGHT / NUM_BOIDS
 
     def cohesion(self, boids):
-        x_sum = 0
-        y_sum = 0
-        count = 0
+        x_sum, y_sum, count = 0, 0, 0
         for i in boids:
-            if (self.x - i.x) ** 2 + (self.y - i.y) ** 2 < (PERCEPTION_RADIUS) ** 2:
-                dist = ((self.x - i.x) ** 2 + (self.y - i.y) ** 2) ** 0.5
-                if dist < PERCEPTION_RADIUS:
-                    x_sum += i.x
-                    y_sum += i.y
-                    count += 1
-        x_avg = x_sum / count if count > 0 else 0
-        y_avg = y_sum / count if count > 0 else 0
-        self.vx += (x_avg - self.x) * COHESION_WEIGHT
-        self.vy += (y_avg - self.y) * COHESION_WEIGHT
+            if (self.x - i.x) ** 2 + (self.y - i.y) ** 2 < PERCEPTION_RADIUS**2:
+                x_sum += i.x
+                y_sum += i.y
+                count += 1
+        if count > 0:
+            self.vx += (x_sum / count - self.x) * COHESION_WEIGHT
+            self.vy += (y_sum / count - self.y) * COHESION_WEIGHT
 
     def limit_speed(self):
         speed = (self.vx**2 + self.vy**2) ** 0.5
@@ -81,10 +73,10 @@ class Boid:
             self.gy += random.uniform(-10, 10)
         if self.gx != 0:
             self.vx += self.gx * 0.05
-            self.gx += -self.gx * 0.05
+            self.gx *= 0.95
         if self.gy != 0:
             self.vy += self.gy * 0.05
-            self.gy += -self.gy * 0.05
+            self.gy *= 0.95
 
     def update(self, boids):
         self.edges()
@@ -97,10 +89,6 @@ class Boid:
         self.y += self.vy
 
 
-pygame.init()
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-clock = pygame.time.Clock()
-
 boids = [
     Boid(
         random.randint(0, WIDTH),
@@ -111,11 +99,23 @@ boids = [
     for _ in range(NUM_BOIDS)
 ]
 
+import pygame
+
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+clock = pygame.time.Clock()
+pygame.display.set_caption("Boids")
+icon_surface = pygame.image.load("icon.bmp")
+pygame.display.set_icon(icon_surface)
+
+
 running = True
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+        if event.type == pygame.VIDEORESIZE:
+            WIDTH, HEIGHT = event.w, event.h
 
     screen.fill((0, 0, 0))
 
