@@ -6,19 +6,17 @@ import time
 
 from drawille import Canvas
 
-# Configurable constants (simulation parameters)
+# Constants
+EDGE_MARGIN = 100  # TODO ensure constants are defined all in the same place
 NUM_BOIDS = 50
 MAX_SPEED = 4
-EDGE_MARGIN = 100
 PERCEPTION_RADIUS = 120
 SEPARATION_RADIUS = 50
 ALIGNMENT_WEIGHT = 0.09
 COHESION_WEIGHT = 0.003
 SEPARATION_WEIGHT = 0.08
 TURN = 1
-ENLIGHTENMENT_CHANCE = 5000
-
-TARGET_FRAME_TIME = 0.05
+enlightenment_chance = 5000
 
 
 class Boid:
@@ -74,8 +72,8 @@ class Boid:
             self.vy -= TURN
 
     def enlightenment(self):
-        if random.randint(0, ENLIGHTENMENT_CHANCE) == random.randint(
-            0, ENLIGHTENMENT_CHANCE
+        if random.randint(0, enlightenment_chance) == random.randint(
+            0, enlightenment_chance
         ):
             self.gx += random.uniform(-10, 10)
             self.gy += random.uniform(-10, 10)
@@ -135,8 +133,8 @@ def init(world_width, world_height):
         Boid(
             random.uniform(0, world_width - 1),
             random.uniform(0, world_height - 1),
-            random.uniform(-MAX_SPEED, MAX_SPEED),
-            random.uniform(-MAX_SPEED, MAX_SPEED),
+            random.uniform(-2, 2),  # TODO Replace -2, 2 with MAX_SPEED
+            random.uniform(-2, 2),
         )
         for _ in range(NUM_BOIDS)
     ]
@@ -169,7 +167,6 @@ def main():
 
     try:
         while True:
-            # Adaptive constants (clamped to current terminal size)
             term_cols, term_rows, world_width, world_height = terminal_geometry()
             edge_margin, perception_radius, separation_radius = simulation_radii(
                 world_width, world_height
@@ -188,7 +185,7 @@ def main():
                 + render(boids, term_cols, term_rows, world_width, world_height)
             )
             sys.stdout.flush()
-            time.sleep(TARGET_FRAME_TIME)
+            time.sleep(0.05)
     except KeyboardInterrupt:
         pass
     finally:
