@@ -18,7 +18,7 @@ SEPARATION_WEIGHT = 0.08
 TURN = 1
 ENLIGHTENMENT_CHANCE = 5000
 
-TARGET_FRAME_TIME = 0.5
+TARGET_FRAME_TIME = 0.1
 
 
 class Boid:
@@ -128,18 +128,6 @@ def simulation_radii(world_width, world_height):
     return edge_margin, perception_radius, separation_radius
 
 
-def get_arrow(angle_index):
-    # Mapping based on: self.angle = int(round(atan2 / (pi/4))) % 8
-    # 0: East, 1: North-East, 2: North, 3: North-West,
-    # 4: West, 5: South-West, 6: South, 7: South-East
-    arrows = ["→", "↗", "↑", "↖", "←", "↙", "↓", "↘"]
-
-    try:
-        return arrows[angle_index]
-    except IndexError:
-        return "·"
-
-
 def init(world_width, world_height):
     sys.stdout.write("\033[?25l")
     sys.stdout.write("\033[H")
@@ -156,11 +144,36 @@ def init(world_width, world_height):
     return boids
 
 
+# Relative pixel offsets for each of the 8 directions (0-7)
+# 0: East, 1: NE, 2: North, 3: NW, 4: West, 5: SW, 6: South, 7: SE
+ARROW_PIXELS = {
+    0: [(0, 0), (-1, 0), (-2, 0), (-1, -1), (-1, 1), (-3, 0)],  # →
+    1: [(0, 0), (-1, 1), (-2, 2), (0, 1), (-1, 0)],  # ↗
+    2: [(0, 0), (0, 1), (0, 2), (-1, 1), (1, 1), (0, 3)],  # ↑
+    3: [(0, 0), (1, 1), (2, 2), (0, 1), (1, 0)],  # ↖
+    4: [(0, 0), (1, 0), (2, 0), (1, -1), (1, 1), (3, 0)],  # ←
+    5: [(0, 0), (1, -1), (2, -2), (0, -1), (1, 0)],  # ↙
+    6: [(0, 0), (0, -1), (0, -2), (-1, -1), (1, -1), (0, -3)],  # ↓
+    7: [(0, 0), (-1, -1), (-2, -2), (0, -1), (-1, 0)],  # ↘
+}
+
+
 def render(boids, term_cols, term_rows, world_width, world_height):
     canvas = Canvas()
 
     for boid in boids:
-        canvas.set(boid.x, boid.y)
+        # Get the pixel offsets for the current direction
+        offsets = ARROW_PIXELS.get(boid.angle, [(0, 0)])
+
+        for dx, dy in offsets:
+            # Draw the boid's "body" pixels
+            # We use boid.x + dx to draw the shape relative to the boid
+            px = boid.x + dx
+            py = boid.y + dy
+
+            # Stay within world bounds to avoid Canvas errors
+            if 0 <= px < world_width and 0 <= py < world_height:
+                canvas.set(px, py)
 
     body = canvas.frame(
         min_x=0,
@@ -168,19 +181,13 @@ def render(boids, term_cols, term_rows, world_width, world_height):
         max_x=world_width,
         max_y=world_height,
     )
+
     lines = body.splitlines()
     if len(lines) < term_rows:
         lines.extend([""] * (term_rows - len(lines)))
-    grid = [list(line.ljust(term_cols)[:term_cols]) for line in lines[:term_rows]]
-    for boid in boids:
-        # Calculate which character cell the boid falls into
-        col = int((boid.x / world_width) * (term_cols - 1))
-        row = int((boid.y / world_height) * (term_rows - 1))
+    lines = [line.ljust(term_cols)[:term_cols] for line in lines[:term_rows]]
 
-        if 0 <= col < term_cols and 0 <= row < term_rows:
-            # Overwrite the Braille character with your directional arrow
-            grid[row][col] = get_arrow(boid.angle)
-    return "\n".join("".join(row) for row in grid)
+    return "\n".join(lines)
 
 
 def main():
