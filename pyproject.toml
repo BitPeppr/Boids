@@ -1,0 +1,12 @@
+[project]
+name = "boids"
+version = "0.1.0"
+description = "Terminal boids simulator"
+requires-python = ">=3.8"
+dependencies = [
+    "drawille >= 0.4"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
