@@ -7,7 +7,7 @@ import time
 from drawille import Canvas
 
 # Configurable constants
-BOID_SPAWN_DENSITY = 1000
+BOID_SPAWN_DENSITY = 1250
 MAX_SPEED = 5
 ALIGNMENT_WEIGHT = 0.035
 COHESION_WEIGHT = 0.003
@@ -20,6 +20,8 @@ MIN_SPEED = 0.7
 PERCEPTION_RADIUS_FACTOR = 6
 SEPARATION_RADIUS_FACTOR = 8
 ANTICENTRE_FACTOR = 0.0001
+ANTICLUSTER_RADIUS_FACTOR=11
+ANTICLUSTER_FACTOR = 0.001
 
 
 TARGET_FRAME_TIME = 0.1
@@ -55,7 +57,8 @@ class Boid:
         for i in boids:
             dx = self.x - i.x
             dy = self.y - i.y
-            if dx * dx + dy * dy < pr2:
+            dist_sq = dx * dx + dy * dy
+            if 0 < dist_sq < pr2:
                 vx_sum += i.vx
                 vy_sum += i.vy
                 count += 1
@@ -66,15 +69,23 @@ class Boid:
             self.vy += (avg_vy - self.vy) * ALIGNMENT_WEIGHT
 
     def cohesion(self, boids, perception_radius):
-        x_sum, y_sum, count = 0, 0, 0
+        x_sum = 0.0
+        y_sum = 0.0
+        count = 0
+        pr2 = perception_radius * perception_radius
         for i in boids:
-            if (self.x - i.x) ** 2 + (self.y - i.y) ** 2 < perception_radius**2:
+            dx = self.x - i.x
+            dy = self.y - i.y
+            dist_sq = dx * dx + dy * dy
+            if 0 < dist_sq < pr2:
                 x_sum += i.x
                 y_sum += i.y
                 count += 1
         if count > 0:
-            self.vx += (x_sum / count - self.x) * COHESION_WEIGHT
-            self.vy += (y_sum / count - self.y) * COHESION_WEIGHT
+            avg_x = x_sum / count
+            avg_y = y_sum / count
+            self.vx += (avg_x - self.x) * COHESION_WEIGHT
+            self.vy += (avg_y - self.y) * COHESION_WEIGHT
 
     def limit_speed(self):
         speed = (self.vx**2 + self.vy**2) ** 0.5
@@ -83,10 +94,20 @@ class Boid:
             self.vy = (self.vy / speed) * MAX_SPEED
 
     def min_speed(self, min_speed):
-        speed = self.vx**2 + self.vy**2
-        if speed < min_speed**2 and speed > 0:
-            self.vx = self.vx * 1.5
-            self.vy = self.vy * 1.5
+        speed_sq = self.vx**2 + self.vy**2
+        if speed_sq == 0:
+            # If stationary, give a small random velocity without heavy trig
+            self.vx = random.uniform(-0.7, 0.7) * min_speed
+            self.vy = random.uniform(-0.7, 0.7) * min_speed
+            # avoid exact-zero
+            if self.vx == 0 and self.vy == 0:
+                self.vx = 0.5 * min_speed
+            return
+        speed = math.sqrt(speed_sq)
+        if speed < min_speed:
+            scale = min_speed / speed
+            self.vx *= scale
+            self.vy *= scale
 
     def edges(self, world_width, world_height, edge_margin):
         if self.x < edge_margin:
@@ -111,10 +132,29 @@ class Boid:
             self.vy += self.gy * 0.05
             self.gy *= 0.85
 
-    def anticentre(self, total_height, total_width, anticentre_factor):
+    def anticentre(self, total_width, total_height, anticentre_factor):
         target_x, target_y = total_width / 2, total_height / 2
         self.vx += (self.x - target_x) * anticentre_factor
         self.vy += (self.y - target_y) * anticentre_factor
+
+    def anticluster(self, boids, anticluster_radius, anticluster_factor):
+        x_mean = 0.0
+        y_mean = 0.0
+        count = 0
+        radius_sq = anticluster_radius * anticluster_radius
+        for b in boids:
+            dx = self.x - b.x
+            dy = self.y - b.y
+            dist_sq = dx * dx + dy * dy
+            if 0 < dist_sq < radius_sq:
+                x_mean += b.x
+                y_mean += b.y
+                count += 1
+        if count > 0:
+            x_mean /= count
+            y_mean /= count
+            self.vx += (self.x - x_mean) * anticluster_factor
+            self.vy += (self.y - y_mean) * anticluster_factor
 
     def update(
         self,
@@ -124,6 +164,7 @@ class Boid:
         edge_margin,
         perception_radius,
         separation_radius,
+        anticluster_radius,
         min_speed=0.5,
         anticluster_factor=0.001,
         anticentre_factor=0.0001,
@@ -132,7 +173,8 @@ class Boid:
         self.separation(boids, separation_radius)
         self.alignment(boids, perception_radius)
         self.cohesion(boids, perception_radius)
-        self.anticentre(world_height, world_width, anticentre_factor)
+        self.anticentre(world_width, world_height, anticentre_factor)
+        self.anticluster(boids, anticluster_radius, anticluster_factor)
         self.enlightenment()
         self.limit_speed()
         self.min_speed(min_speed)
@@ -157,11 +199,15 @@ def simulation_radii(
     world_height,
     perception_factor=PERCEPTION_RADIUS_FACTOR,
     separation_factor=SEPARATION_RADIUS_FACTOR,
+    anticluster_factor=ANTICLUSTER_RADIUS_FACTOR,
 ):
-    edge_margin = max(1, world_width // 10, world_height // 10)
-    perception_radius = max(1, world_width // perception_factor, perception_factor // 6)
-    separation_radius = max(1, separation_factor // 11, separation_factor // 11)
-    return edge_margin, perception_radius, separation_radius
+    # Use the smaller world dimension so radii scale consistently with terminal size.
+    min_dim = min(world_width, world_height)
+    edge_margin = max(1, min_dim // 10)
+    perception_radius = max(1, min_dim // perception_factor)
+    separation_radius = max(1, min_dim // separation_factor)
+    anticluster_radius = max(1, min_dim // anticluster_factor)
+    return edge_margin, perception_radius, separation_radius, anticluster_radius
 
 
 def init(world_width, world_height):
@@ -257,11 +303,12 @@ def main():
 
             # Adaptive constants (clamped to current terminal size)
             term_cols, term_rows, world_width, world_height = terminal_geometry()
-            edge_margin, perception_radius, separation_radius = simulation_radii(
+            edge_margin, perception_radius, separation_radius, anticluster_radius = simulation_radii(
                 world_width,
                 world_height,
                 PERCEPTION_RADIUS_FACTOR,
                 SEPARATION_RADIUS_FACTOR,
+                ANTICLUSTER_RADIUS_FACTOR,
             )
             for boid in boids:
                 boid.update(
@@ -271,7 +318,9 @@ def main():
                     edge_margin,
                     perception_radius,
                     separation_radius,
+                    anticluster_radius,
                     MIN_SPEED,
+                    ANTICLUSTER_FACTOR,
                     ANTICENTRE_FACTOR,
                 )
             sys.stdout.write(
