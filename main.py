@@ -3,28 +3,125 @@ import random
 import shutil
 import sys
 import time
+from collections import defaultdict
 
 from drawille import Canvas
 
 # Configurable constants
-BOID_SPAWN_DENSITY = 1250
+PREDATOR_SPAWN_DENSITY = 10000
+BOID_SPAWN_DENSITY = 1700
 MAX_SPEED = 5
 ALIGNMENT_WEIGHT = 0.035
 COHESION_WEIGHT = 0.003
-SEPARATION_WEIGHT = 0.20
+SEPARATION_WEIGHT = 0.05
 TURN = 0.5
-ENLIGHTENMENT_CHANCE = 50000
+ENLIGHTENMENT_CHANCE = 5000
 MIN_SPEED = 0.7
 # Perception and separation radii are now calculated dynamically based on terminal size, but these factors can be adjusted for different behaviors.
-# Actual radius is equal to terminal_width (assuming width>height) / factor, clamped to a minimum of 1.
+# Actual radius is equal to terminal_width (assuming width > height) / factor, clamped to a minimum of 1.
 PERCEPTION_RADIUS_FACTOR = 6
 SEPARATION_RADIUS_FACTOR = 8
 ANTICENTRE_FACTOR = 0.0001
-ANTICLUSTER_RADIUS_FACTOR=11
+ANTICLUSTER_RADIUS_FACTOR = 11
 ANTICLUSTER_FACTOR = 0.001
+PREDATOR_AVOIDANCE_WEIGHT = 5
 
 
-TARGET_FRAME_TIME = 0.1
+TARGET_FRAME_TIME = 0.11
+
+
+class SpatialHash:
+    def __init__(self, cell_size):
+        self.cell_size = cell_size
+        self.cells = defaultdict(list)
+
+    def _hash(self, x, y):
+        return int(x // self.cell_size), int(y // self.cell_size)
+
+    def insert(self, boid):
+        cell = self._hash(boid.x, boid.y)
+        self.cells[cell].append(boid)
+
+    def query(self, x, y):
+        cell_x, cell_y = self._hash(x, y)
+        nearby_boids = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                cell = (cell_x + dx, cell_y + dy)
+                nearby_boids.extend(self.cells.get(cell, []))
+        return nearby_boids
+
+    def pred_query(self, x, y):
+        cell_x, cell_y = self._hash(x, y)
+        nearby_predators = []
+        for dx in (-2, -1, 0, 1, 2):
+            for dy in (-2, -1, 0, 1, 2):
+                cell = (cell_x + dx, cell_y + dy)
+                nearby_predators.extend(self.cells.get(cell, []))
+        return nearby_predators
+
+    def clear(self):
+        for lst in self.cells.values():
+            lst.clear()
+
+
+class Predator:
+    def __init__(self, x, y, vx, vy):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+
+    def update(
+        self,
+        boids,
+        world_width,
+        world_height,
+        accel_factor,
+        centering_force,
+        min_speed,
+        max_speed,
+    ):
+        # Move towards nearest boid
+        nearest_boid = min(
+            boids, key=lambda b: (self.x - b.x) ** 2 + (self.y - b.y) ** 2
+        )
+        self.vx += (nearest_boid.x - self.x) * accel_factor
+        self.vy += (nearest_boid.y - self.y) * accel_factor
+
+        # Move towards centre
+        self.vx += (world_width / 2 - self.x) * centering_force
+        self.vy += (world_height / 2 - self.y) * centering_force
+
+        # Move away from edges
+        edge_margin = min(world_width, world_height) // 10
+        if self.x < edge_margin * 2:
+            self.vx += TURN
+        elif self.x > world_width - edge_margin * 2:
+            self.vx -= TURN
+        if self.y < edge_margin * 2:
+            self.vy += TURN
+        elif self.y > world_height - edge_margin * 2:
+            self.vy -= TURN
+
+        speed_sq = self.vx * self.vx + self.vy * self.vy
+
+        # Enforce min and max speed
+        if speed_sq == 0:
+            self.vx = 0.3 * min_speed * random.choice([-1, 1])
+            self.vy = 0.3 * min_speed * random.choice([-1, 1])
+            return
+        if speed_sq < min_speed * min_speed:
+            scale = min_speed / math.sqrt(speed_sq)
+            self.vx *= scale
+            self.vy *= scale
+        elif speed_sq > max_speed * max_speed:
+            scale = max_speed / math.sqrt(speed_sq)
+            self.vx *= scale
+            self.vy *= scale
+
+        self.x += self.vx
+        self.y += self.vy
 
 
 class Boid:
@@ -37,77 +134,64 @@ class Boid:
         self.gy = 0
         self.angle = 0
 
-    def separation(self, boids, separation_radius):
+    def update_flocking(self, boids, perception_radius, separation_radius):
         sep_sq = separation_radius * separation_radius
-        for i in boids:
-            dx = self.x - i.x
-            dy = self.y - i.y
+        per_sq = perception_radius * perception_radius
+
+        sep_vx, sep_vy = 0.0, 0.0
+        align_vx, align_vy = 0.0, 0.0
+        coh_x, coh_y = 0.0, 0.0
+        align_count, coh_count = 0, 0
+
+        for other in boids:
+            dx = self.x - other.x
+            dy = self.y - other.y
             dist_sq = dx * dx + dy * dy
-            if 0 < dist_sq < sep_sq:
+
+            if dist_sq == 0:
+                continue  # Skip self, minor but probably not needed (apart from removing division by zero?)
+
+            # Separation
+            if dist_sq < sep_sq:
                 inv = 1.0 / dist_sq
                 inv = min(inv, 100.0)
-                self.vx += dx * inv * SEPARATION_WEIGHT
-                self.vy += dy * inv * SEPARATION_WEIGHT
+                sep_vx += dx * inv
+                sep_vy += dy * inv
 
-    def alignment(self, boids, perception_radius):
-        vx_sum = 0.0
-        vy_sum = 0.0
-        count = 0
-        pr2 = perception_radius * perception_radius
-        for i in boids:
-            dx = self.x - i.x
-            dy = self.y - i.y
-            dist_sq = dx * dx + dy * dy
-            if 0 < dist_sq < pr2:
-                vx_sum += i.vx
-                vy_sum += i.vy
-                count += 1
-        if count > 0:
-            avg_vx = vx_sum / count
-            avg_vy = vy_sum / count
-            self.vx += (avg_vx - self.vx) * ALIGNMENT_WEIGHT
-            self.vy += (avg_vy - self.vy) * ALIGNMENT_WEIGHT
+            # Alignment and cohesion
+            if dist_sq < per_sq:
+                align_vx += other.vx
+                align_vy += other.vy
+                coh_x += other.x
+                coh_y += other.y
+                align_count += 1
+                coh_count += 1
 
-    def cohesion(self, boids, perception_radius):
-        x_sum = 0.0
-        y_sum = 0.0
-        count = 0
-        pr2 = perception_radius * perception_radius
-        for i in boids:
-            dx = self.x - i.x
-            dy = self.y - i.y
-            dist_sq = dx * dx + dy * dy
-            if 0 < dist_sq < pr2:
-                x_sum += i.x
-                y_sum += i.y
-                count += 1
-        if count > 0:
-            avg_x = x_sum / count
-            avg_y = y_sum / count
-            self.vx += (avg_x - self.x) * COHESION_WEIGHT
-            self.vy += (avg_y - self.y) * COHESION_WEIGHT
+        self.vx += sep_vx * SEPARATION_WEIGHT
+        self.vy += sep_vy * SEPARATION_WEIGHT
 
-    def limit_speed(self):
-        speed = (self.vx**2 + self.vy**2) ** 0.5
-        if speed > MAX_SPEED:
-            self.vx = (self.vx / speed) * MAX_SPEED
-            self.vy = (self.vy / speed) * MAX_SPEED
+        if align_count:
+            self.vx += ((align_vx / align_count) - self.vx) * ALIGNMENT_WEIGHT
+            self.vy += ((align_vy / align_count) - self.vy) * ALIGNMENT_WEIGHT
+            # Both align and cohesion use the same count, so no need to check them separately; that's rather redundant :)
+            self.vx += ((coh_x / coh_count) - self.x) * COHESION_WEIGHT
+            self.vy += ((coh_y / coh_count) - self.y) * COHESION_WEIGHT
 
-    def min_speed(self, min_speed):
-        speed_sq = self.vx**2 + self.vy**2
+    def clamp_speed(self, min_speed, max_speed):
+        speed_sq = self.vx * self.vx + self.vy * self.vy
         if speed_sq == 0:
-            # If stationary, give a small random velocity without heavy trig
-            self.vx = random.uniform(-0.7, 0.7) * min_speed
-            self.vy = random.uniform(-0.7, 0.7) * min_speed
-            # avoid exact-zero
-            if self.vx == 0 and self.vy == 0:
-                self.vx = 0.5 * min_speed
+            self.vx = 0.7 * min_speed * random.choice([-1, 1])
+            self.vy = 0.7 * min_speed * random.choice([-1, 1])
             return
         speed = math.sqrt(speed_sq)
-        if speed < min_speed:
+        if speed > max_speed:
+            scale = max_speed / speed
+        elif speed < min_speed:
             scale = min_speed / speed
-            self.vx *= scale
-            self.vy *= scale
+        else:
+            return
+        self.vx *= scale
+        self.vy *= scale
 
     def edges(self, world_width, world_height, edge_margin):
         if self.x < edge_margin:
@@ -165,19 +249,36 @@ class Boid:
         perception_radius,
         separation_radius,
         anticluster_radius,
-        min_speed=0.5,
+        min_speed,
+        predator_avoidance_weight,
         anticluster_factor=0.001,
         anticentre_factor=0.0001,
+        predators=None,
     ):
         self.edges(world_width, world_height, edge_margin)
-        self.separation(boids, separation_radius)
-        self.alignment(boids, perception_radius)
-        self.cohesion(boids, perception_radius)
+
+        # Flee from nearby predators
+        if predators:
+            pred_vx, pred_vy = 0.0, 0.0
+            for p in predators:
+                dx = self.x - p.x
+                dy = self.y - p.y
+                dist_sq = dx * dx + dy * dy
+                if dist_sq == 0:
+                    continue
+                inv = 1.0 / dist_sq
+                inv = min(inv, 100.0)
+                pred_vx += dx * inv
+                pred_vy += dy * inv
+            # Apply predator avoidance influence
+            self.vx += pred_vx * predator_avoidance_weight
+            self.vy += pred_vy * predator_avoidance_weight
+
+        self.update_flocking(boids, perception_radius, separation_radius)
         self.anticentre(world_width, world_height, anticentre_factor)
         self.anticluster(boids, anticluster_radius, anticluster_factor)
         self.enlightenment()
-        self.limit_speed()
-        self.min_speed(min_speed)
+        self.clamp_speed(min_speed, MAX_SPEED)
         self.x += self.vx
         self.y += self.vy
         self.angle = int(round(math.atan2(-self.vy, self.vx) / (math.pi / 4))) % 8
@@ -223,8 +324,17 @@ def init(world_width, world_height):
         )
         for _ in range(NUM_BOIDS)
     ]
+    predators = [
+        Predator(
+            random.uniform(0, world_width - 1),
+            random.uniform(0, world_height - 1),
+            random.uniform(-MAX_SPEED, MAX_SPEED),
+            random.uniform(-MAX_SPEED, MAX_SPEED),
+        )
+        for _ in range((world_width * world_height) // PREDATOR_SPAWN_DENSITY)
+    ]
 
-    return boids
+    return boids, predators
 
 
 # Relative pixel offsets for each of the 8 directions (0-7)
@@ -241,7 +351,15 @@ ARROW_PIXELS = {
 }
 
 
-def render(boids, term_cols, term_rows, world_width, world_height, boid_count=None):
+def render(
+    boids,
+    term_cols,
+    term_rows,
+    world_width,
+    world_height,
+    boid_count=None,
+    predators=None,
+):
     canvas = Canvas()
 
     for boid in boids:
@@ -250,13 +368,21 @@ def render(boids, term_cols, term_rows, world_width, world_height, boid_count=No
 
         for dx, dy in offsets:
             # Draw the boid's "body" pixels
-            # We use boid.x + dx to draw the shape relative to the boid
             px = boid.x + dx
             py = boid.y + dy
 
-            # Stay within world bounds to avoid Canvas errors
             if 0 <= px < world_width and 0 <= py < world_height:
                 canvas.set(px, py)
+
+    # Draw predators as a small cross so they're visible on the canvas
+    if predators:
+        pred_offsets = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]
+        for pred in predators:
+            for dx, dy in pred_offsets:
+                px = pred.x + dx
+                py = pred.y + dy
+                if 0 <= px < world_width and 0 <= py < world_height:
+                    canvas.set(px, py)
 
     body = canvas.frame(
         min_x=0,
@@ -273,9 +399,9 @@ def render(boids, term_cols, term_rows, world_width, world_height, boid_count=No
     # Overlay simple metrics at the bottom-left
     metrics = ""
     if boid_count is not None:
-        if metrics:
-            metrics += " "
         metrics += f"BOIDS:{boid_count}"
+    if predators:
+        metrics += f" PRED:{len(predators)}"
 
     if metrics:
         last_idx = term_rows - 1
@@ -288,31 +414,55 @@ def render(boids, term_cols, term_rows, world_width, world_height, boid_count=No
 
 def main():
     term_cols, term_rows, world_width, world_height = terminal_geometry()
-    boids = init(world_width, world_height)
-    last_time = time.time()
-    fps = 0.0
+    boids, predators = init(world_width, world_height)
+    edge_margin, perception_radius, separation_radius, anticluster_radius = (
+        simulation_radii(
+            world_width,
+            world_height,
+            PERCEPTION_RADIUS_FACTOR,
+            SEPARATION_RADIUS_FACTOR,
+            ANTICLUSTER_RADIUS_FACTOR,
+        )
+    )
+    spatial_hash = SpatialHash(cell_size=perception_radius)
+    predator_hash = SpatialHash(cell_size=perception_radius)
+    last_geometry = (term_cols, term_rows)
 
     try:
         while True:
-            now = time.time()
-            elapsed = now - last_time
-            last_time = now
-            if elapsed > 0:
-                instant_fps = 1.0 / elapsed
-                fps = (fps * 0.9) + (instant_fps * 0.1) if fps else instant_fps
-
-            # Adaptive constants (clamped to current terminal size)
             term_cols, term_rows, world_width, world_height = terminal_geometry()
-            edge_margin, perception_radius, separation_radius, anticluster_radius = simulation_radii(
-                world_width,
-                world_height,
-                PERCEPTION_RADIUS_FACTOR,
-                SEPARATION_RADIUS_FACTOR,
-                ANTICLUSTER_RADIUS_FACTOR,
-            )
+
+            # Updating spatial hash if terminal resizes
+            if (term_cols, term_rows) != last_geometry:
+                last_geometry = (term_cols, term_rows)
+                (
+                    edge_margin,
+                    perception_radius,
+                    separation_radius,
+                    anticluster_radius,
+                ) = simulation_radii(
+                    world_width,
+                    world_height,
+                    PERCEPTION_RADIUS_FACTOR,
+                    SEPARATION_RADIUS_FACTOR,
+                    ANTICLUSTER_RADIUS_FACTOR,
+                )
+                spatial_hash = SpatialHash(cell_size=perception_radius)
+                predator_hash = SpatialHash(cell_size=perception_radius)
+
+            # Boids :D
+            spatial_hash.clear()
             for boid in boids:
+                spatial_hash.insert(boid)
+            predator_hash.clear()
+            for predator in predators:
+                predator_hash.insert(predator)
+
+            for boid in boids:
+                neighbours = spatial_hash.query(boid.x, boid.y)
+                nearby_predators = predator_hash.query(boid.x, boid.y)
                 boid.update(
-                    boids,
+                    neighbours,
                     world_width,
                     world_height,
                     edge_margin,
@@ -320,9 +470,23 @@ def main():
                     separation_radius,
                     anticluster_radius,
                     MIN_SPEED,
+                    PREDATOR_AVOIDANCE_WEIGHT,
                     ANTICLUSTER_FACTOR,
                     ANTICENTRE_FACTOR,
+                    predators=nearby_predators,
                 )
+            for predator in predators:
+                nearby_boids = spatial_hash.pred_query(predator.x, predator.y)
+                if nearby_boids:
+                    predator.update(
+                        nearby_boids,
+                        world_width,
+                        world_height,
+                        accel_factor=0.05,
+                        centering_force=0.0005,
+                        min_speed=MIN_SPEED,
+                        max_speed=MAX_SPEED * 0.3,
+                    )
             sys.stdout.write(
                 "\033[H"
                 + render(
@@ -332,10 +496,12 @@ def main():
                     world_width,
                     world_height,
                     boid_count=len(boids),
+                    predators=predators,
                 )
             )
             sys.stdout.flush()
             time.sleep(TARGET_FRAME_TIME)
+
     except KeyboardInterrupt:
         pass
     finally:
