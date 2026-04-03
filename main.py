@@ -32,6 +32,7 @@ ANTICLUSTER_RADIUS_FACTOR = 11
 ANTICLUSTER_FACTOR = 0.001
 PREDATOR_AVOIDANCE_WEIGHT = 5
 PREDATOR_SEPARATION = 0.1
+NOISE_STRENGTH = 0.01
 
 
 TARGET_FRAME_TIME = 0.11
@@ -91,6 +92,7 @@ class Predator:
         predators,
         predator_separation,
         turn,
+        noise,
     ):
         # Move towards nearest boid
         if boids:
@@ -128,6 +130,10 @@ class Predator:
             self.vy += turn
         elif self.y > world_height - edge_margin * 2:
             self.vy -= turn
+
+        # Noise
+        self.vx += random.uniform(-noise, noise)
+        self.vy += random.uniform(-noise, noise)
 
         speed_sq = self.vx * self.vx + self.vy * self.vy
 
@@ -294,6 +300,7 @@ class Boid:
         separation_weight,
         turn,
         enlightenment_chance,
+        noise,
         predators=None,
     ):
         self.edges(world_width, world_height, edge_margin, turn)
@@ -326,6 +333,8 @@ class Boid:
         self.anticentre(world_width, world_height, anticentre_factor)
         self.anticluster(boids, anticluster_radius, anticluster_factor)
         self.enlightenment(enlightenment_chance)
+        self.vx += random.uniform(-noise, noise)
+        self.vy += random.uniform(-noise, noise)
         self.clamp_speed(min_speed, max_speed)
         self.x += self.vx
         self.y += self.vy
@@ -564,6 +573,13 @@ def args():
         help="Edge turning force magnitude",
     )
 
+    parser.add_argument(
+        "--noise-strength",
+        type=float,
+        default=NOISE_STRENGTH,
+        help="Random noise strength added to velocity each frame",
+    )
+
     # Frame rate
     parser.add_argument(
         "--frame-time",
@@ -578,7 +594,7 @@ def args():
 def validate_config(config):
     """Validate configuration parameters to prevent runtime errors."""
     errors = []
-    
+
     if config.boid_density <= 0:
         errors.append("--boid-density must be positive")
     if config.predator_density <= 0:
@@ -599,7 +615,7 @@ def validate_config(config):
         errors.append("--enlightenment-chance must be positive")
     if config.frame_time <= 0:
         errors.append("--frame-time must be positive")
-    
+
     if errors:
         print("Configuration errors:", file=sys.stderr)
         for error in errors:
@@ -614,7 +630,10 @@ def main():
 
     # Ensure we're running in a terminal
     if not sys.stdin.isatty():
-        print("Error: This program must be run in a terminal (stdin is not a TTY)", file=sys.stderr)
+        print(
+            "Error: This program must be run in a terminal (stdin is not a TTY)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Save original terminal/file descriptor settings
@@ -625,10 +644,10 @@ def main():
     try:
         # Configure stdin as non-blocking
         fcntl.fcntl(sys.stdin, fcntl.F_SETFL, origin_flags | os.O_NONBLOCK)
-        
+
         # Ensure stdout is blocking
         fcntl.fcntl(sys.stdout, fcntl.F_SETFL, origin_stdout_flags & ~os.O_NONBLOCK)
-        
+
         # Use cbreak mode instead of raw to allow Ctrl+C to work
         tty.setcbreak(sys.stdin)
 
@@ -726,6 +745,7 @@ def main():
                         config.separation_weight,
                         config.turn,
                         config.enlightenment_chance,
+                        config.noise_strength,
                         predators=nearby_predators,
                     )
                 for predator in predators:
@@ -742,6 +762,7 @@ def main():
                         predators=nearby_predators,
                         predator_separation=config.predator_separation,
                         turn=config.turn,
+                        noise=config.noise_strength,
                     )
 
                 if select.select([sys.stdin], [], [], 0)[0]:
@@ -785,7 +806,9 @@ def main():
             fcntl.fcntl(sys.stdout, fcntl.F_SETFL, origin_stdout_flags)
             sys.stdout.write("\033[?25h\n")
         except Exception as e:
-            sys.stderr.write(f"\033[?25h\nWarning: failed to restore terminal state: {e}\n")
+            sys.stderr.write(
+                f"\033[?25h\nWarning: failed to restore terminal state: {e}\n"
+            )
 
 
 if __name__ == "__main__":
