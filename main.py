@@ -452,7 +452,6 @@ def render(
     term_rows,
     world_width,
     world_height,
-    boid_count=None,
     predators=None,
     allure=None,
 ):
@@ -510,19 +509,6 @@ def render(
     if len(lines) < term_rows:
         lines.extend([""] * (term_rows - len(lines)))
     lines = [line.ljust(term_cols)[:term_cols] for line in lines[:term_rows]]
-
-    # Overlay simple metrics at the bottom-left
-    metrics = ""
-    if boid_count is not None:
-        metrics += f"BOIDS:{boid_count}"
-    if predators:
-        metrics += f" PRED:{len(predators)}"
-
-    if metrics:
-        last_idx = term_rows - 1
-        line = lines[last_idx]
-        m = metrics[:term_cols]
-        lines[last_idx] = m + line[len(m) :]
 
     return "\n".join(lines)
 
@@ -904,7 +890,6 @@ def main():
                         term_rows,
                         world_width,
                         world_height,
-                        boid_count=len(boids),
                         predators=predators,
                         allure=allure,
                     )
