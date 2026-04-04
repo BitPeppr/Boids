@@ -19,8 +19,8 @@ BOID_SPAWN_DENSITY = 1700
 MAX_SPEED = 5
 ALIGNMENT_WEIGHT = 0.035
 COHESION_WEIGHT = 0.003
-SEPARATION_WEIGHT = 0.05
-TURN = 0.5
+SEPARATION_WEIGHT = 0.10
+TURN = 0.75
 ENLIGHTENMENT_CHANCE = 5000
 MIN_SPEED = 0.7
 # Perception and separation radii are now calculated dynamically based on terminal size, but these factors can be adjusted for different behaviors.
@@ -30,12 +30,53 @@ SEPARATION_RADIUS_FACTOR = 8
 ANTICENTRE_FACTOR = 0.0001
 ANTICLUSTER_RADIUS_FACTOR = 11
 ANTICLUSTER_FACTOR = 0.001
+ALLURE_DETECTION_RADIUS_FACTOR = 3
+ALLURING_WEIGHT = 15
+ALLURE_LIFETIME = 20
 PREDATOR_AVOIDANCE_WEIGHT = 5
 PREDATOR_SEPARATION = 0.1
 NOISE_STRENGTH = 0.01
 
 
 TARGET_FRAME_TIME = 0.11
+
+
+class Allure:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.frame_animation_base = [
+            (2, 2),
+            (2, 1),
+            (2, 0),
+            (2, -1),
+            (2, -2),
+            (-2, 2),
+            (-2, 1),
+            (-2, 0),
+            (-2, -1),
+            (-2, -2),
+            (1, 2),
+            (0, 2),
+            (-1, 2),
+            (1, -2),
+            (0, -2),
+            (-1, -2),
+        ]
+        self.frame_animation_dynamic = [
+            [(0, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)],
+            [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)],
+        ]
+        self.frame_count = 0
+
+    def animate(self):
+        base = self.frame_animation_base
+
+        dynamic_frame = self.frame_count % len(self.frame_animation_dynamic)
+        dynamic = self.frame_animation_dynamic[dynamic_frame]
+
+        self.frame_count += 1
+        return base, dynamic
 
 
 class SpatialHash:
@@ -122,13 +163,13 @@ class Predator:
 
         # Move away from edges
         edge_margin = min(world_width, world_height) // 10
-        if self.x < edge_margin * 2:
+        if self.x < edge_margin * 3:
             self.vx += turn
-        elif self.x > world_width - edge_margin * 2:
+        elif self.x > world_width - edge_margin * 3:
             self.vx -= turn
-        if self.y < edge_margin * 2:
+        if self.y < edge_margin * 3:
             self.vy += turn
-        elif self.y > world_height - edge_margin * 2:
+        elif self.y > world_height - edge_margin * 3:
             self.vy -= turn
 
         # Noise
@@ -141,6 +182,10 @@ class Predator:
         if speed_sq == 0:
             self.vx = 0.3 * min_speed * random.choice([-1, 1])
             self.vy = 0.3 * min_speed * random.choice([-1, 1])
+            self.x += self.vx
+            self.y += self.vy
+            self.x = max(0, min(world_width - 1, self.x))
+            self.y = max(0, min(world_height - 1, self.y))
             return
         if speed_sq < min_speed * min_speed:
             scale = min_speed / math.sqrt(speed_sq)
@@ -245,9 +290,7 @@ class Boid:
             self.vy -= turn
 
     def enlightenment(self, enlightenment_chance):
-        if random.randint(0, enlightenment_chance) == random.randint(
-            0, enlightenment_chance
-        ):
+        if random.randint(0, enlightenment_chance) == 0:
             self.gx += random.uniform(-10, 10)
             self.gy += random.uniform(-10, 10)
         if self.gx != 0:
@@ -301,7 +344,10 @@ class Boid:
         turn,
         enlightenment_chance,
         noise,
+        allure_detection_radius_factor,
+        allure_weight,
         predators=None,
+        allure=None,
     ):
         self.edges(world_width, world_height, edge_margin, turn)
 
@@ -321,6 +367,24 @@ class Boid:
             # Apply predator avoidance influence
             self.vx += pred_vx * predator_avoidance_weight
             self.vy += pred_vy * predator_avoidance_weight
+
+        if allure:
+            for a in allure:
+                dx = a.x - self.x
+                dy = a.y - self.y
+                dist_sq = dx * dx + dy * dy
+                if (
+                    dist_sq
+                    > (min(world_width, world_height) / allure_detection_radius_factor)
+                    ** 2
+                ):
+                    continue
+                if dist_sq == 0:
+                    continue
+                inv = 1.0 / dist_sq
+                inv = min(inv, 100.0)
+                self.vx += dx * inv * allure_weight
+                self.vy += dy * inv * allure_weight
 
         self.update_flocking(
             boids,
@@ -390,6 +454,7 @@ def render(
     world_height,
     boid_count=None,
     predators=None,
+    allure=None,
 ):
     canvas = Canvas()
 
@@ -422,6 +487,15 @@ def render(
             for dx, dy in pred_offsets:
                 px = pred.x + dx
                 py = pred.y + dy
+                if 0 <= px < world_width and 0 <= py < world_height:
+                    canvas.set(px, py)
+
+    if allure:
+        for a in allure:
+            base, dynamic = a.animate()
+            for dx, dy in base + dynamic:
+                px = a.x + dx
+                py = a.y + dy
                 if 0 <= px < world_width and 0 <= py < world_height:
                     canvas.set(px, py)
 
@@ -588,6 +662,34 @@ def args():
         help="Target frame time in seconds",
     )
 
+    parser.add_argument(
+        "--allure-chance",
+        type=int,
+        default=-1,
+        help="Chance for an allure to spawn (1 in N per frame)",
+    )
+
+    parser.add_argument(
+        "--allure-lifetime",
+        type=int,
+        default=ALLURE_LIFETIME,
+        help="Lifetime of an allure in frames",
+    )
+
+    parser.add_argument(
+        "--allure-detection-radius-factor",
+        type=int,
+        default=ALLURE_DETECTION_RADIUS_FACTOR,
+        help="Detection radius factor for allure (world_dim / factor)",
+    )
+
+    parser.add_argument(
+        "--alluring-weight",
+        type=float,
+        default=ALLURING_WEIGHT,
+        help="Weight of allure attraction force",
+    )
+
     return parser.parse_args()
 
 
@@ -678,6 +780,8 @@ def main():
                 for _ in range((world_width * world_height) // config.predator_density)
             ]
 
+        allure = []
+
         sys.stdout.write("\033[?25l")
         sys.stdout.write("\033[H")
 
@@ -697,6 +801,21 @@ def main():
         try:
             while True:
                 term_cols, term_rows, world_width, world_height = terminal_geometry()
+
+                if (
+                    config.allure_chance > 0
+                    and random.randint(0, config.allure_chance) == 0
+                ):
+                    allure.append(
+                        Allure(
+                            random.uniform(
+                                edge_margin * 2, world_width - edge_margin * 2
+                            ),
+                            random.uniform(
+                                edge_margin * 2, world_height - edge_margin * 2
+                            ),
+                        )
+                    )
 
                 # Updating spatial hash if terminal resizes
                 if (term_cols, term_rows) != last_geometry:
@@ -746,7 +865,10 @@ def main():
                         config.turn,
                         config.enlightenment_chance,
                         config.noise_strength,
+                        config.allure_detection_radius_factor,
+                        config.alluring_weight,
                         predators=nearby_predators,
+                        allure=allure,
                     )
                 for predator in predators:
                     nearby_boids = spatial_hash.pred_query(predator.x, predator.y)
@@ -765,6 +887,8 @@ def main():
                         noise=config.noise_strength,
                     )
 
+                allure = [a for a in allure if a.frame_count <= config.allure_lifetime]
+
                 if select.select([sys.stdin], [], [], 0)[0]:
                     c = sys.stdin.read(1)
                     if c and c.lower() == "q":
@@ -782,6 +906,7 @@ def main():
                         world_height,
                         boid_count=len(boids),
                         predators=predators,
+                        allure=allure,
                     )
                 )
                 sys.stdout.flush()
