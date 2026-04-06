@@ -53,6 +53,8 @@ NOISE_STRENGTH = 0.01
 
 TARGET_FRAME_TIME = 0.11
 
+SUICIDE_VALUE = 0.5
+
 
 # --------------- Spatialhash class ----------------
 class SpatialHash:
@@ -110,6 +112,7 @@ class Boid:
         self.gx = 0.0
         self.gy = 0.0
         self.angle = 0
+        self.history = [(0.0, 0.0)]*10
 
     def update_flocking(
         self,
@@ -208,8 +211,35 @@ class Boid:
                 b.hitbox_x[0] < self.x < b.hitbox_x[1]
                 and b.hitbox_y[0] < self.y < b.hitbox_y[1]
             ):
-                self.vx += (self.x - b.x) * edge_force * 0.175
-                self.vy += (self.y - b.y) * edge_force * 0.175
+                self.vx += (self.x - b.x) * edge_force * 0.25
+                self.vy += (self.y - b.y) * edge_force * 0.25
+
+    def respawn(self, world_width: int, world_height: int, edge_margin:int) -> None:
+        self.x = random.uniform(edge_margin, world_width - edge_margin)
+        self.y = random.uniform(edge_margin, world_height - edge_margin)
+        self.vx = random.uniform(-MAX_SPEED, MAX_SPEED)
+        self.vy = random.uniform(-MAX_SPEED, MAX_SPEED)
+
+    def check_for_staleness(self, blocks: list['Block'], suicide_threshold: float, world_width: int, world_height: int, edge_margin: int) -> bool:
+        self.history.append((self.x, self.y))
+        self.history.pop(0)
+        a_state = self.history[0]
+        b_state = self.history[len(self.history) // 3 * 2]
+        c_state = self.history[len(self.history) // 3]
+        a_distance = (a_state[0] - self.x)**2 + (a_state[1] - self.y)**2
+        b_distance = (b_state[0] - self.x)**2 + (b_state[1] - self.y)**2
+        c_distance = (c_state[0] - self.x)**2 + (c_state[1] - self.y)**2
+        avg=(a_distance+b_distance+c_distance)/3
+        if avg<suicide_threshold**2:
+            self.respawn(world_width, world_height, edge_margin)
+            return True
+
+        for b in blocks:
+            if (b.x - b.width) < self.x < (b.x + b.width) and (b.y - b.width) < self.y < (b.y + b.width):
+                self.respawn(world_width, world_height, edge_margin)
+                return True
+        return False
+
 
     def update(
         self,
@@ -231,6 +261,7 @@ class Boid:
         noise: float,
         allure_weight: float,
         allure_detection_radius_sq: float,
+        suicide_value: float,
         blocks: list["Block"],
         predators: list["Predator"] | None = None,
         allure: list["Allure"] | None = None,
@@ -271,6 +302,8 @@ class Boid:
             separation_radius_sq,
             perception_radius_sq,
         )
+        if self.check_for_staleness(blocks, suicide_value, world_width, world_height, edge_margin):
+            return
         self.anticentre(world_width, world_height, anticentre_factor)
         self.enlightenment(enlightenment_chance)
         self.avoid_blocks(blocks, edge_force)
@@ -428,8 +461,8 @@ class Block:
         self.y = y
         self.width = width
         # store hitboxes as [min, max] for both axes to make checks simpler
-        self.hitbox_x = [self.x - self.width * 1.75, self.x + self.width * 1.75]
-        self.hitbox_y = [self.y - self.width * 1.75, self.y + self.width * 1.75]
+        self.hitbox_x = [self.x - self.width * 1.75, self.x + self.width * 2.5]
+        self.hitbox_y = [self.y - self.width * 1.75, self.y + self.width * 2.5]
 
 
 # ----------- Helper functions ----------------
@@ -695,6 +728,12 @@ def parse_args() -> Namespace:
     parser.add_argument(
         "--block-width", type=int, default=BLOCK_WIDTH, help="Width of blocks"
     )
+    parser.add_argument(
+        "--suicide-value",
+        type=float,
+        default=SUICIDE_VALUE,
+        help='Min amount of average movement over the past ten frames before boid respawns'
+    )
 
     return parser.parse_args()
 
@@ -759,6 +798,8 @@ def validate_config(config: argparse.Namespace) -> None:
         errors.append("--blocks should be a positive non-zero integer")
     if config.block_width <= 0:
         errors.append("--blocks should have positive non-zero side length")
+    if config.suicide_value <= 0:
+        errors.append("--suicide_value must be greater than 0")
 
     if errors:
         print("Configuration errors:", file=sys.stderr)
@@ -813,17 +854,17 @@ def main() -> None:
                 )
                 for _ in range((world_width * world_height) // config.predator_density)
             ]
+        
         if config.blocks:
-            blocks = [
-                Block(
-                    random.randint(1, world_width - 1),
-                    random.randint(1, world_height - 1),
-                    config.block_width,
-                )
-                for _ in range((world_width * world_height) // config.blocks)
-            ]
+            grid_xs = range(config.block_width, world_width - config.block_width, config.block_width*2)
+            grid_ys = range(config.block_width, world_height - config.block_width, config.block_width*2)
+            all_cells = [(x, y) for x in grid_xs for y in grid_ys]
+            count = min((world_width * world_height) // config.blocks, len(all_cells))
+            chosen = random.sample(all_cells, count)
+            blocks = [Block(x, y, config.block_width) for x, y in chosen]
         else:
             blocks = []
+
 
         allure = []
 
@@ -912,6 +953,7 @@ def main() -> None:
                         config.noise_strength,
                         config.alluring_weight,
                         allure_detection_radius_sq,
+                        config.suicide_value,
                         blocks=close_blocks,
                         predators=nearby_predators,
                         allure=allure,
