@@ -1007,6 +1007,8 @@ def main() -> None:
                                 actual_button = button & 0b11
                                 if not motion and actual_button ==0:
                                     if 0 <= x < term_cols and 0 <= y < term_rows:
+                                        if len(allure) >= 5:
+                                            allure.pop(0)
                                         allure.append(Allure(x * 2, y * 4))
                     elif c and (c == b"q" or c == b'Q' or c == b"\x03"):
                         break
