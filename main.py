@@ -14,7 +14,7 @@ from typing import Union
 
 from drawille import Canvas
 
-# ---------------------- Configurable constants -------------------
+# ---------------------- Configurable constants (Defaults – runtime flags take priority) -------------------
 PREDATOR_SPAWN_DENSITY = 10000
 BOID_SPAWN_DENSITY = 2250
 
@@ -56,7 +56,7 @@ TARGET_FRAME_TIME = 0.11
 SUICIDE_VALUE = 0.5
 
 
-# --------------- Spatialhash class ----------------
+# --------------- Spatialhash class (Hashing for performance :D) ----------------
 class SpatialHash:
     cells: dict[tuple[int, int], list[Union["Boid", "Predator", "Block"]]]
 
@@ -94,7 +94,7 @@ class SpatialHash:
         self.cells.clear()
 
 
-# --------------- Boid class -----------------------
+# --------------- Boid class (Little arrows of chaos and innocence :D) -----------------------
 class Boid:
     x: float
     y: float
@@ -166,6 +166,8 @@ class Boid:
             self.vx = 0.7 * min_speed * random.choice([-1, 1])
             self.vy = 0.7 * min_speed * random.choice([-1, 1])
             # Close enough to 1/sqrt(2) that we can skip the actual division and just scale by 0.7*min_speed :D
+            # sqrt(2) is too expensive to compute, I think this is close enough. I'm one M1, if you're on a crazy
+            # setup maybe you can change it yourself to actual sqrt(2)
             return
         if speed_sq > max_speed_sq:
             scale = max_speed / speed_sq**0.5
@@ -270,7 +272,7 @@ class Boid:
     ) -> None:
         self.edges(world_width, world_height, edge_margin, edge_force)
 
-        # Flee from nearby predators
+        # Run, my dears, run!
         if predators:
             pred_vx, pred_vy = 0.0, 0.0
             for p in predators:
@@ -285,6 +287,7 @@ class Boid:
             self.vx += pred_vx * predator_avoidance_weight
             self.vy += pred_vy * predator_avoidance_weight
 
+        # Oh heavens, it's too shiny!
         if allure:
             for a in allure:
                 dx = a.x - self.x
@@ -296,6 +299,7 @@ class Boid:
                 self.vx += dx * inv * allure_weight
                 self.vy += dy * inv * allure_weight
 
+        # Flocking behaviour
         self.update_flocking(
             boids,
             alignment_weight,
@@ -319,13 +323,14 @@ class Boid:
         self.y = max(0, min(world_height - 1, self.y))
 
 
-# ------------ Allure -----------------------
+# ------------ Allure (Alluring, twinkling squares of clustering doom) -----------------------
 class Allure:
     x: float
     y: float
     frame_count: int
 
-    # Class-level constants — identical for every instance, no need to allocate per-object
+    # Deafult animations (uniform across all instances)
+    # Consists of a base (static) set of pixels and a moving / dynamic set
     FRAME_BASE: tuple[tuple[int, int], ...] = (
         (2, 2),
         (2, 1),
@@ -361,7 +366,7 @@ class Allure:
         return self.FRAME_BASE, dynamic
 
 
-# --------------- Predator class -----------------------
+# --------------- Predator class (Oh no! It's the crosses) -----------------------
 class Predator:
     x: float
     y: float
@@ -446,6 +451,7 @@ class Predator:
             self.vx *= scale
             self.vy *= scale
 
+        # Update position and clamp to world boundaries
         self.x += self.vx
         self.y += self.vy
         self.x = max(0, min(world_width - 1, self.x))
@@ -822,6 +828,7 @@ def validate_config(config: argparse.Namespace) -> None:
 
 # -------------- Main loop ----------------
 def main() -> None:
+    # Parse cli flags
     config = parse_args()
     validate_config(config)
 
@@ -832,6 +839,7 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Save original terminal settings and configure terminal for optimal experience
     origin_flags = fcntl.fcntl(sys.stdin, fcntl.F_GETFL)
     origin_stdout_flags = fcntl.fcntl(sys.stdout, fcntl.F_GETFL)
     origin_term = termios.tcgetattr(sys.stdin)
@@ -841,6 +849,8 @@ def main() -> None:
         fcntl.fcntl(sys.stdout, fcntl.F_SETFL, origin_stdout_flags & ~os.O_NONBLOCK)
         tty.setcbreak(sys.stdin)
         stdin_fd = sys.stdin.buffer.fileno()
+
+        # Setup global constants, initiate boids, predators, blocks, ...
 
         term_cols, term_rows, world_width, world_height = terminal_geometry()
 
@@ -897,6 +907,8 @@ def main() -> None:
         for block in blocks:
             blocks_hash.insert(block)
         last_geometry = (term_cols, term_rows)
+
+        # Main simulation loop :D
 
         try:
             while True:
@@ -1029,6 +1041,9 @@ def main() -> None:
                 sys.stdout.flush()
                 time.sleep(config.frame_time)
 
+
+        # Error handling, cleanup, ...
+
         except KeyboardInterrupt:
             pass
         finally:
@@ -1055,4 +1070,5 @@ def main() -> None:
 
 # ------------- Entry point ----------------
 if __name__ == "__main__":
+    # :D Exciting!
     main()
