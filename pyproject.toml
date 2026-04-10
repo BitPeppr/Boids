@@ -1,10 +1,21 @@
 [project]
-name = "Aether"
+name = "Rosella"
 version = "0.1.0"
+readme = "README.md"
 description = "Terminal boids simulator"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = ["drawille>=0.2"]
+license = { file = "LICENSE" }
 
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+rosella = "rosella.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rosella"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["venv/", "dist/"]

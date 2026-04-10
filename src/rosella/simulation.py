@@ -1067,8 +1067,4 @@ def main() -> None:
                 f"\033[?25h\nWarning: failed to restore terminal state: {e}\n"
             )
 
-
-# ------------- Entry point ----------------
-if __name__ == "__main__":
-    # :D Exciting!
-    main()
+# Actual running will be done by calling cli.py
